@@ -16,100 +16,102 @@ const GY_HEX: &str = "483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb
 const N_HEX: &str = "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141";
 
 lazy_static! {
-    static ref SECP256K1: Curve = Curve {
-        p: BigInt::from_str_radix(P_HEX, 16).unwrap(),
-        a: BigInt::from_str_radix(A_HEX, 16).unwrap(),
-        b: BigInt::from_str_radix(B_HEX, 16).unwrap(),
-        gx: BigInt::from_str_radix(GX_HEX, 16).unwrap(),
-        gy: BigInt::from_str_radix(GY_HEX, 16).unwrap(),
-        n: BigInt::from_str_radix(N_HEX, 16).unwrap(),
-    };
+    static ref SECP256K1: Curve = Curve::new(P_HEX, A_HEX, B_HEX, GX_HEX, GY_HEX, N_HEX);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Point {
+struct Point<'a> {
     x: BigInt,
     y: BigInt,
+    curve: &'a Curve,
 }
 
-impl Point {
+impl<'a> Point<'a> {
     fn new(x: BigInt, y: BigInt) -> Self {
-        Self { x, y }
+        Self {
+            x,
+            y,
+            curve: &SECP256K1,
+        }
     }
     fn infinity() -> Self {
         Self {
             x: BigInt::zero(),
             y: BigInt::zero(),
+            curve: &SECP256K1,
         }
     }
     fn is_infinity(&self) -> bool {
         self.x == BigInt::zero() && self.y == BigInt::zero()
     }
+    fn new_with_curve(x: BigInt, y: BigInt, curve: &'a Curve) -> Point<'a> {
+        Self { x, y, curve }
+    }
 }
 
-impl Add for Point {
-    type Output = Point;
+impl<'a> Add for Point<'a> {
+    type Output = Point<'a>;
 
     fn add(self, rhs: Self) -> Self::Output {
-        SECP256K1.add(&self, &rhs)
+        self.curve.add(&self, &rhs)
     }
 }
 
-impl<'a, 'b, U> Add<&'a U> for Point
+impl<'a, U> Add<&'a U> for Point<'a>
 where
-    U: Borrow<Point>,
+    U: Borrow<Point<'a>>,
 {
-    type Output = Point;
+    type Output = Point<'a>;
 
     fn add(self, rhs: &'a U) -> Self::Output {
-        SECP256K1.add(&self, rhs.borrow())
+        self.curve.add(&self, rhs.borrow())
     }
 }
 
-impl<'a, 'b, U> Add<&'a U> for &'b Point
+impl<'a, 'b, 'c, U> Add<&'a U> for &'b Point<'c>
 where
-    U: Borrow<Point>,
+    U: Borrow<Point<'c>>,
 {
-    type Output = Point;
+    type Output = Point<'c>;
 
     fn add(self, rhs: &'a U) -> Self::Output {
-        SECP256K1.add(self, rhs.borrow())
+        self.curve.add(self, rhs.borrow())
     }
 }
 
-impl<'a> Mul<&'a Point> for BigInt {
-    type Output = Point;
+impl<'a, 'b> Mul<&'a Point<'b>> for BigInt {
+    type Output = Point<'b>;
 
-    fn mul(self, rhs: &Point) -> Self::Output {
-        SECP256K1.multiply(rhs, &self)
+    fn mul(self, rhs: &Point<'b>) -> Self::Output {
+        rhs.curve.multiply(rhs, &self)
     }
 }
 
-impl Mul<Point> for BigInt {
-    type Output = Point;
+impl<'a> Mul<Point<'a>> for BigInt {
+    type Output = Point<'a>;
 
-    fn mul(self, rhs: Point) -> Self::Output {
-        SECP256K1.multiply(&rhs, &self)
+    fn mul(self, rhs: Point<'a>) -> Self::Output {
+        rhs.curve.multiply(&rhs, &self)
     }
 }
 
-impl Mul<BigInt> for Point {
-    type Output = Point;
+impl<'a> Mul<BigInt> for Point<'a> {
+    type Output = Point<'a>;
 
     fn mul(self, rhs: BigInt) -> Self::Output {
-        SECP256K1.multiply(&self, &rhs)
+        self.curve.multiply(&self, &rhs)
     }
 }
 
-impl<'a> Mul<BigInt> for &'a Point {
-    type Output = Point;
+impl<'a, 'b> Mul<BigInt> for &'a Point<'b> {
+    type Output = Point<'b>;
 
     fn mul(self, rhs: BigInt) -> Self::Output {
-        SECP256K1.multiply(self, &rhs)
+        self.curve.multiply(self, &rhs)
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 struct Curve {
     p: BigInt,
     a: BigInt,
@@ -120,7 +122,7 @@ struct Curve {
 }
 
 /// Using mod_floor() instead of %
-impl Curve {
+impl<'a> Curve {
     fn new(p: &str, a: &str, b: &str, gx: &str, gy: &str, n: &str) -> Self {
         Self {
             p: BigInt::from_str_radix(p, 16).unwrap(),
@@ -137,7 +139,7 @@ impl Curve {
         ((y.pow(2) - x.pow(3) - &self.a * x - &self.b).mod_floor(&self.p)).is_zero()
     }
 
-    fn add(&self, p: &Point, q: &Point) -> Point {
+    fn add(&self, p: &Point<'a>, q: &Point<'a>) -> Point<'a> {
         // handle special case of P + 0 = 0 + P = 0
         if p.is_infinity() {
             q.clone()
@@ -163,7 +165,7 @@ impl Curve {
         }
     }
 
-    fn double(&self, p: &Point) -> Point {
+    fn double(&self, p: &Point<'a>) -> Point<'a> {
         if p.is_infinity() {
             Point::infinity()
         } else {
@@ -171,7 +173,7 @@ impl Curve {
         }
     }
 
-    fn multiply(&self, p: &Point, n: &BigInt) -> Point {
+    fn multiply(&self, p: &Point<'a>, n: &BigInt) -> Point<'a> {
         let mut q = Point::infinity();
         let mut m = p.clone();
         for i in n.to_str_radix(2).chars().rev() {
@@ -225,6 +227,8 @@ fn inv(n: &BigInt, p: &BigInt) -> BigInt {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr;
+
     use super::*;
 
     #[test]
@@ -272,19 +276,29 @@ mod tests {
     fn test_public_key_is_on_the_curve() {
         let g = SECP256K1.generator();
         let (pk1, pk2, pk3) = (&g + &g, &g + &g + &g, &g + &g + &g + &g);
+
+        let sk = BigInt::from_str("22265090479312778178772228083027296664144").unwrap();
+        let pk4 = sk * &g;
         assert!(SECP256K1.is_on_curve(&pk1));
         assert!(SECP256K1.is_on_curve(&pk2));
         assert!(SECP256K1.is_on_curve(&pk3));
+        assert!(SECP256K1.is_on_curve(&pk4));
+    }
+
+    #[test]
+    fn test_add() {
+        let g = SECP256K1.generator();
+        let d = &g + &g;
+        let dd = &d + &d;
+        assert_eq!(&g + &d, &d + &g);
+        assert_eq!((&g + &d) + &dd, &g + &(&d + &dd));
     }
 
     #[test]
     #[should_panic]
     fn test_add_invalid_point() {
         let g = SECP256K1.generator();
-        g + &Point {
-            x: One::one(),
-            y: One::one(),
-        };
+        g + &Point::new(One::one(), One::one());
     }
 
     #[test]
