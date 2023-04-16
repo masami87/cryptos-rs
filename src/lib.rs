@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate lazy_static;
 
-mod secp256k1;
+mod crypto;
 pub fn add(left: usize, right: usize) -> usize {
     left + right
 }
