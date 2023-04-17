@@ -6,6 +6,8 @@ mod error;
 mod key;
 mod script;
 mod transaction;
+
+pub use error::{CryptosError, Result};
 pub fn add(left: usize, right: usize) -> usize {
     left + right
 }

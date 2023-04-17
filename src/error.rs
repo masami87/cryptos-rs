@@ -4,8 +4,10 @@ use thiserror::Error;
 pub enum CryptosError {
     #[error("network failed: {0}")]
     Network(#[from] std::io::Error),
-    #[error("{0}")]
+    #[error("key error: {0}")]
     Key(String),
+    #[error("internal error: {0}")]
+    Internal(String),
     #[error("unknown error")]
     Unknown,
 }
