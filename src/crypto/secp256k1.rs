@@ -1,11 +1,9 @@
-#![allow(unused)]
-use num_bigint::{BigInt, RandBigInt, ToBigInt};
+use num_bigint::BigInt;
 use num_integer::{ExtendedGcd, Integer};
-use num_traits::{Num, One, Signed, Zero};
-use rand::{thread_rng, Rng};
+use num_traits::{Num, One, Zero};
 use std::{
     borrow::Borrow,
-    ops::{Add, Mul, Rem},
+    ops::{Add, Mul},
 };
 
 const P_HEX: &str = "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F";
@@ -19,10 +17,14 @@ lazy_static! {
     static ref SECP256K1: Curve = Curve::new(P_HEX, A_HEX, B_HEX, GX_HEX, GY_HEX, N_HEX);
 }
 
+pub fn secp256k1_generator() -> Point<'static> {
+    SECP256K1.generator()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Point<'a> {
-    x: BigInt,
-    y: BigInt,
+pub struct Point<'a> {
+    pub x: BigInt,
+    pub y: BigInt,
     curve: &'a Curve,
 }
 
@@ -298,7 +300,7 @@ mod tests {
     #[should_panic]
     fn test_add_invalid_point() {
         let g = SECP256K1.generator();
-        g + &Point::new(One::one(), One::one());
+        let _ = g + &Point::new(One::one(), One::one());
     }
 
     #[test]
