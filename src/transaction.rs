@@ -4,11 +4,11 @@ pub struct TxIn {
     /// Prev transaction ID: hash256 of prev tx contents.
     prev_tx: Vec<u8>,
     /// UTXO output index in the transaction.
-    prev_index: u64,
+    prev_index: usize,
     /// Unlocking script.
     script_sig: Script,
     /// Almost not use today.
-    sequence: u32,
+    sequence: usize,
 }
 
 impl Default for TxIn {
@@ -16,7 +16,7 @@ impl Default for TxIn {
         Self {
             prev_tx: Vec::new(),
             prev_index: 0,
-            script_sig: Script,
+            script_sig: Script::new(vec![]),
             sequence: 0,
         }
     }
@@ -33,7 +33,7 @@ impl Default for TxOut {
     fn default() -> Self {
         Self {
             amount: 0,
-            script_pubkey: Script,
+            script_pubkey: Script::new(vec![]),
         }
     }
 }
