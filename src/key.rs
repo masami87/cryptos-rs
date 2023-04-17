@@ -3,6 +3,7 @@ use crate::crypto::{
     secp256k1::{secp256k1_generator, Point},
     sha256::sha256,
 };
+use crate::error::Result;
 
 use num_bigint::BigInt;
 use num_integer::Integer;
@@ -36,7 +37,7 @@ impl<'a> PublicKey<'a> {
         PublicKey::from_point(&pk_point)
     }
 
-    pub fn encode(&self, compressed: bool, hash160: bool) -> Vec<u8> {
+    pub fn encode(&self, compressed: bool, hash160: bool) -> Result<Vec<u8>> {
         let publick_key = match compressed {
             true => {
                 // (x,y) is very redundant. Because y^2 = x^3 + 7,
@@ -59,15 +60,15 @@ impl<'a> PublicKey<'a> {
             }
         };
         if hash160 {
-            ripemd160(&sha256(&publick_key))
+            Ok(ripemd160(&sha256(&publick_key)))
         } else {
-            publick_key
+            Ok(publick_key)
         }
     }
 
     /// Return the associated bitcoin address for this public key as string
-    pub fn address(&self, net: Net, compressed: bool) -> String {
-        let pkb_hash = self.encode(compressed, true);
+    pub fn address(&self, net: Net, compressed: bool) -> Result<String> {
+        let pkb_hash = self.encode(compressed, true)?;
 
         let version = match net {
             Net::Main => b"\x00",
@@ -94,8 +95,12 @@ impl<'a> PublicKey<'a> {
     }
 }
 
-fn base_58_check(data: &[u8]) -> String {
-    assert_eq!(data.len(), 25);
+fn base_58_check(data: &[u8]) -> Result<String> {
+    if data.len() != 25 {
+        return Err(crate::error::CryptosError::Key(
+            "the length of data != 25".to_string(),
+        ));
+    }
     let mut n = BigInt::from_signed_bytes_be(data);
     let mut i: BigInt;
     let mut chars = String::new();
@@ -107,7 +112,7 @@ fn base_58_check(data: &[u8]) -> String {
         .iter()
         .take_while(|&b| *b == 0x00 as u8)
         .map(|_| BASE58_CHARS.chars().nth(0).unwrap());
-    zeros.chain(chars.chars().rev()).collect()
+    Ok(zeros.chain(chars.chars().rev()).collect())
 }
 const BASE58_CHARS: &'static str = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
@@ -118,24 +123,24 @@ mod tests {
     use crate::crypto::secp256k1::secp256k1_generator;
 
     use super::*;
-    use hex;
+    use hex::{self, ToHex};
     use num_bigint::BigInt;
     use num_traits::{Num, One};
 
     #[test]
-    fn test_btc_addresses() {
+    fn test_btc_addresses() -> Result<()> {
         // https://www.blockchain.com/explorer/addresses/btc-testnet/mrCDrCybB6J1vRfbwM5hemdJz73FwDBC8r
         let sk: BigInt = One::one();
         let pk_point = sk * secp256k1_generator();
         let pk = PublicKey::from_point(&pk_point);
-        let address = pk.address(Net::Test, true);
+        let address = pk.address(Net::Test, true)?;
         assert_eq!(&address, "mrCDrCybB6J1vRfbwM5hemdJz73FwDBC8r");
 
         // https://www.blockchain.com/btc-testnet/address/mnNcaVkC35ezZSgvn8fhXEa9QTHSUtPfzQ
         let sk = BigInt::from_str("22265090479312778178772228083027296664144").unwrap();
         let pk_point = sk * secp256k1_generator();
         let pk = PublicKey::from_point(&pk_point);
-        let address = pk.address(Net::Test, true);
+        let address = pk.address(Net::Test, true)?;
         assert_eq!(&address, "mnNcaVkC35ezZSgvn8fhXEa9QTHSUtPfzQ");
 
         // https://github.com/karpathy/cryptos/blob/main/tests/test_keys.py
@@ -168,8 +173,21 @@ mod tests {
             .for_each(|(net, compressed, sk_hex, expect)| {
                 let sk = BigInt::from_str_radix(sk_hex, 16).unwrap();
                 let pk = PublicKey::from_sk(&sk);
-                let address = pk.address(net.into(), compressed);
+                let address = pk.address(Net::from(net), compressed).unwrap();
                 assert_eq!(&address, expect,);
-            })
+            });
+        Ok(())
+    }
+
+    #[test]
+    fn test_public_key_hash() -> Result<()> {
+        let sk = BigInt::from_str("22265090479312778178772228083027296664144").unwrap();
+        let pk = PublicKey::from_sk(&sk);
+        let hash = pk.encode(true, true)?;
+        assert_eq!(
+            hash.encode_hex::<String>(),
+            "4b3518229b0d3554fe7cd3796ade632aff3069d8"
+        );
+        Ok(())
     }
 }
