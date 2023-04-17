@@ -2,7 +2,10 @@
 extern crate lazy_static;
 
 mod crypto;
+mod error;
 mod key;
+mod script;
+mod transaction;
 pub fn add(left: usize, right: usize) -> usize {
     left + right
 }
