@@ -2,8 +2,10 @@
 extern crate lazy_static;
 
 mod crypto;
+mod encoding;
 mod error;
 mod key;
+mod network;
 mod script;
 mod transaction;
 
