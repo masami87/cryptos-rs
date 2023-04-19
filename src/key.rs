@@ -4,28 +4,12 @@ use crate::crypto::{
     sha256::sha256,
 };
 use crate::error::Result;
+use crate::network::Net;
 
 use num_bigint::BigInt;
 use num_integer::Integer;
 use num_traits::{ToPrimitive, Zero};
 pub(crate) struct PublicKey<'a>(Point<'a>);
-
-pub enum Net {
-    Main,
-    Test,
-}
-
-impl From<&str> for Net {
-    fn from(value: &str) -> Self {
-        if value == "main" {
-            Self::Main
-        } else if value == "test" {
-            Self::Test
-        } else {
-            panic!("Unknown Net type: {}", value)
-        }
-    }
-}
 
 impl<'a> PublicKey<'a> {
     pub fn from_point(point: &Point<'a>) -> Self {
