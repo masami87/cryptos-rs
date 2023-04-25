@@ -1,20 +1,45 @@
 use std::{
     fmt::Debug,
     io::{BufReader, Read},
+    ops::Add,
 };
 
 use crate::{
+    crypto::{
+        ecdsa::{verify, Signature},
+        ripemd160::ripemd160,
+        sha256::sha256,
+    },
     encoding::{decode_int, decode_varint, encode_int, encode_varint},
+    key::PublicKey,
     CryptosError, Result,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Cmd {
     Op(u8),
     Bytes(Vec<u8>),
 }
+
+impl Cmd {
+    pub fn encode(&self) -> Vec<u8> {
+        match self {
+            Cmd::Op(op) => vec![*op],
+            Cmd::Bytes(bytes) => bytes.clone(),
+        }
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        match bytes.len() {
+            1 => Ok(Self::Op(bytes[0])),
+            0 => Err(CryptosError::Internal("empty bytes for cmd".to_string())),
+            _ => Ok(Self::Bytes(bytes.to_vec())),
+        }
+    }
+}
+#[derive(Clone)]
 pub struct Script {
-    cmds: Vec<Cmd>,
+    pub cmds: Vec<Cmd>,
 }
 
 impl Debug for Script {
@@ -42,6 +67,16 @@ impl PartialEq for Script {
             .iter()
             .zip(other.cmds.iter())
             .all(|(lhs, rhs)| lhs == rhs)
+    }
+}
+
+impl Add for Script {
+    type Output = Script;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Script {
+            cmds: [self.cmds, rhs.cmds].concat(),
+        }
     }
 }
 
@@ -126,6 +161,52 @@ impl Script {
         let mut result = encode_varint(out.len() as u64)?;
         result.extend(out.iter());
         Ok(result)
+    }
+
+    pub fn evalueate(&self, mod_tx_enc: &[u8]) -> Result<bool> {
+        // for now let's just support a standard p2pkh transaction
+        assert_eq!(self.cmds.len(), 7);
+
+        // signature
+        assert!(matches!(self.cmds[0], Cmd::Bytes(_)));
+        // pubkey
+        assert!(matches!(self.cmds[1], Cmd::Bytes(_)));
+        // OP_DUP
+        assert!(matches!(self.cmds[2], Cmd::Op(118)));
+        // OP_HASH160
+        assert!(matches!(self.cmds[3], Cmd::Op(169)));
+        // hash
+        assert!(matches!(self.cmds[4], Cmd::Bytes(_)));
+        // OP_EQUALVERIFY
+        assert!(matches!(self.cmds[5], Cmd::Op(136)));
+        // OP_CHECKSIG
+        assert!(matches!(self.cmds[6], Cmd::Op(172)));
+
+        // verify the public key hash, answering the OP_EQUALVERIFY challenge
+        let (pubkey, pubkey_hash) = (&self.cmds[1], &self.cmds[4]);
+        let hash = ripemd160(&sha256(&pubkey.encode()));
+        if hash != pubkey_hash.encode() {
+            return Ok(false);
+        }
+
+        // verify the digital signature of the transaction, answering the OP_CHECKSIG challenge
+        // DER encoded signature, but crop out the last byte
+        let mut der = self.cmds[0].encode().clone();
+        let sighash_type = der.pop().ok_or(CryptosError::Internal(format!(
+            "no sighash type in {:?}",
+            self.cmds[0]
+        )))?;
+        assert_eq!(sighash_type, 1);
+
+        // public key without hash
+        let sec = self.cmds[1].encode();
+        let pk = PublicKey::decode(&sec)?;
+
+        let sig = Signature::decode(&der);
+
+        let valid = verify(&pk, mod_tx_enc, &sig);
+
+        Ok(valid)
     }
 }
 

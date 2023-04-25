@@ -14,7 +14,7 @@ const GY_HEX: &str = "483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb
 const N_HEX: &str = "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141";
 
 lazy_static! {
-    static ref SECP256K1: Curve = Curve::new(P_HEX, A_HEX, B_HEX, GX_HEX, GY_HEX, N_HEX);
+    pub static ref SECP256K1: Curve = Curve::new(P_HEX, A_HEX, B_HEX, GX_HEX, GY_HEX, N_HEX);
 }
 
 pub fn secp256k1_generator() -> Point<'static> {
@@ -29,14 +29,14 @@ pub struct Point<'a> {
 }
 
 impl<'a> Point<'a> {
-    fn new(x: BigInt, y: BigInt) -> Self {
+    pub fn new(x: BigInt, y: BigInt) -> Self {
         Self {
             x,
             y,
             curve: &SECP256K1,
         }
     }
-    fn infinity() -> Self {
+    pub fn infinity() -> Self {
         Self {
             x: BigInt::zero(),
             y: BigInt::zero(),
@@ -46,7 +46,7 @@ impl<'a> Point<'a> {
     fn is_infinity(&self) -> bool {
         self.x == BigInt::zero() && self.y == BigInt::zero()
     }
-    fn new_with_curve(x: BigInt, y: BigInt, curve: &'a Curve) -> Point<'a> {
+    pub fn new_with_curve(x: BigInt, y: BigInt, curve: &'a Curve) -> Point<'a> {
         Self { x, y, curve }
     }
 }
@@ -114,13 +114,13 @@ impl<'a, 'b> Mul<BigInt> for &'a Point<'b> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-struct Curve {
-    p: BigInt,
+pub struct Curve {
+    pub p: BigInt,
+    pub n: BigInt,
     a: BigInt,
     b: BigInt,
     gx: BigInt,
     gy: BigInt,
-    n: BigInt,
 }
 
 /// Using mod_floor() instead of %
@@ -217,7 +217,7 @@ fn extended_eucidean_algorithm(a: &BigInt, b: &BigInt) -> (BigInt, BigInt, BigIn
 }
 
 /// Returns modular multiplicate inverse m s.t. (n * m) % p == 1
-fn inv(n: &BigInt, p: &BigInt) -> BigInt {
+pub fn inv(n: &BigInt, p: &BigInt) -> BigInt {
     // let (gcd, x, _) = extended_eucidean_algorithm(&n, &p);
     let ExtendedGcd { gcd, x, y } = n.extended_gcd(p);
     assert!(gcd.is_one());
