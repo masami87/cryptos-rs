@@ -1,17 +1,40 @@
+use std::{io::Read, ops::Div};
+
 use crate::crypto::{
     ripemd160::ripemd160,
-    secp256k1::{secp256k1_generator, Point},
+    secp256k1::{secp256k1_generator, Point, SECP256K1},
     sha256::sha256,
 };
 use crate::error::Result;
 use crate::network::Net;
 
-use num_bigint::BigInt;
+use num_bigint::{BigInt, RandBigInt, RandomBits, Sign};
 use num_integer::Integer;
 use num_traits::{ToPrimitive, Zero};
-pub(crate) struct PublicKey<'a>(Point<'a>);
+
+pub fn gen_secret_key(n: &BigInt) -> BigInt {
+    let mut rng = rand::thread_rng();
+    rng.gen_bigint_range(&BigInt::from(1), n)
+}
+
+pub fn gen_key_pair<'a>() -> (PublicKey<'a>, BigInt) {
+    let sk = gen_secret_key(&SECP256K1.n);
+    let pk = PublicKey::from_sk(&sk);
+    (pk, sk)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct PublicKey<'a>(pub Point<'a>);
 
 impl<'a> PublicKey<'a> {
+    pub fn x(&self) -> BigInt {
+        self.0.x.clone()
+    }
+
+    pub fn y(&self) -> BigInt {
+        self.0.y.clone()
+    }
+
     pub fn from_point(point: &Point<'a>) -> Self {
         PublicKey(point.clone())
     }
@@ -19,6 +42,37 @@ impl<'a> PublicKey<'a> {
     pub fn from_sk(sk: &BigInt) -> Self {
         let pk_point = sk.clone() * secp256k1_generator();
         PublicKey::from_point(&pk_point)
+    }
+
+    /// decode public key encode without hash
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        if bytes[0] == 4 {
+            let x = BigInt::from_bytes_be(Sign::Plus, &bytes[1..33]);
+            let y = BigInt::from_bytes_be(Sign::Plus, &bytes[33..65]);
+
+            let p = Point::new(x, y);
+            return Ok(Self(p));
+        }
+
+        assert!([2u8, 3u8].contains(&bytes[0]));
+        let is_even = bytes[0] == 2;
+        let x = BigInt::from_bytes_be(Sign::Plus, &bytes[1..]);
+
+        // solve y^2 = x^3 + 7 for y, but mod p
+        let p = &SECP256K1.p;
+        let y2: BigInt = x.modpow(&BigInt::from(3), p) + 7;
+        let y2 = y2.mod_floor(p);
+        // y = y2^((p+1)/4) mod p
+        // when p = 3 (mod 4) can use this to compute sqrt
+        let y = y2.modpow(&(p + BigInt::from(1)).div(BigInt::from(4)), p);
+        // In the given code, the parity of y refers to whether y is even. If y is even, then its parity is true; otherwise, its parity is false.
+        // In elliptic curve cryptography, the parity of y is used to compress the public key.
+        // The compressed public key only contains the x coordinate and an additional byte to indicate the parity of y.
+        // This way, the full public key can be recovered from the compressed public key.
+        let y = if y.is_even() == is_even { y } else { p - y }; // flip if needed to make the evenness agree
+
+        let p = Point::new(x, y);
+        Ok(Self(p))
     }
 
     pub fn encode(&self, compressed: bool, hash160: bool) -> Result<Vec<u8>> {
@@ -39,6 +93,7 @@ impl<'a> PublicKey<'a> {
                 prefix
                     .iter()
                     .chain(self.0.x.to_bytes_be().1.iter())
+                    .chain(self.0.y.to_bytes_be().1.iter())
                     .cloned()
                     .collect::<Vec<_>>()
             }
@@ -110,6 +165,7 @@ mod tests {
     use hex::{self, ToHex};
     use num_bigint::BigInt;
     use num_traits::{Num, One};
+    use pretty_assertions::assert_eq;
 
     #[test]
     fn test_btc_addresses() -> Result<()> {
@@ -164,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn test_public_key_hash() -> Result<()> {
+    fn test_public_key_encode() -> Result<()> {
         let sk = BigInt::from_str("22265090479312778178772228083027296664144").unwrap();
         let pk = PublicKey::from_sk(&sk);
         let hash = pk.encode(true, true)?;
@@ -172,6 +228,23 @@ mod tests {
             hash.encode_hex::<String>(),
             "4b3518229b0d3554fe7cd3796ade632aff3069d8"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_public_key_decode() -> Result<()> {
+        let sk = BigInt::from_str("22265090479312778178772228083027296664144").unwrap();
+        let pk = PublicKey::from_sk(&sk);
+        let bytes = pk.encode(false, false)?;
+
+        let pk_raw = PublicKey::decode(&bytes)?;
+        assert_eq!(pk_raw, pk);
+
+        let bytes = pk.encode(true, false)?;
+
+        let pk_raw = PublicKey::decode(&bytes)?;
+        assert_eq!(pk_raw, pk);
+
         Ok(())
     }
 }
