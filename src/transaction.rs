@@ -1,7 +1,6 @@
 use std::{
     fs,
-    io::{BufReader, Cursor, Read, Write},
-    iter::Sum,
+    io::{BufReader, Read, Write},
     path::Path,
 };
 
@@ -184,6 +183,24 @@ impl Tx {
             }
         }
         Ok(true)
+    }
+
+    pub fn is_coinbase(&self) -> bool {
+        self.tx_ins.len() == 1
+            && self.tx_ins[0].prev_tx == [0; 32].to_vec()
+            && self.tx_ins[0].prev_index == 0xffffffff
+    }
+
+    /// returns the block number of a given transaction, following BIP0034
+    pub fn coinbase_height(&self) -> Option<u64> {
+        if self.is_coinbase() {
+            let mut bytes = self.tx_ins[0].script_sig.cmds[0].encode();
+            assert!(bytes.len() <= 8);
+            bytes.resize(8, 0);
+            Some(u64::from_le_bytes(bytes.try_into().unwrap()))
+        } else {
+            None
+        }
     }
 }
 
@@ -369,10 +386,15 @@ fn fetch(tx_id: &str, net: Net) -> Result<Tx> {
 
 #[cfg(test)]
 mod tests {
-    use crate::script::Cmd;
+    use crate::{
+        crypto::ecdsa::sign,
+        key::{address_to_pkb_hash, PublicKey},
+        script::Cmd,
+    };
 
     use super::*;
 
+    use num_bigint::BigInt;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -526,6 +548,136 @@ mod tests {
         assert_eq!(tx.validate()?, false);
         tx.tx_ins[0].script_sig.cmds[1] = cmd1;
         assert_eq!(tx.validate()?, true);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_tx() -> Result<()> {
+        // this example follows Programming Bitcoin Chapter 7
+
+        // define the inputs of our aspiring transaction
+        let prev_tx =
+            hex::decode("0d6fe5213c0b3291f208cba8bfb59b7476dffacc4e5cb66f6eb20a080843a299")?;
+        let prev_index = 13;
+
+        let tx_in = TxIn {
+            prev_tx,
+            prev_index,
+            script_sig: Script::new(vec![]),
+            sequence: 0,
+            witness: vec![],
+            net: Net::Test,
+        };
+
+        // change output that goes back to us
+        // 0.33 tBTC in units of satoshi
+        let amount = (0.33 * 1e8) as u64;
+        let pkb_hash = address_to_pkb_hash("mzx5YhAH9kNHtcN481u6WkjeHjYtVeKVh2")?;
+
+        // OP_DUP, OP_HASH160, <hash>, OP_EQUALVERIFY, OP_CHECKSIG
+        let script_pubkey = Script::new(
+            [
+                Cmd::Op(118),
+                Cmd::Op(169),
+                Cmd::Bytes(pkb_hash),
+                Cmd::Op(136),
+                Cmd::Op(172),
+            ]
+            .to_vec(),
+        );
+        let tx_out_change = TxOut {
+            amount,
+            script_pubkey,
+        };
+
+        // target output that goes to a lucky recepient
+        // 0.1 tBTC in units of satoshi
+        let amount = (0.1 * 1e8) as u64;
+        let pkb_hash = address_to_pkb_hash("mnrVtF8DWjMu839VW3rBfgYaAfKk8983Xf")?;
+        // OP_DUP, OP_HASH160, <hash>, OP_EQUALVERIFY, OP_CHECKSIG
+        let script_pubkey = Script::new(
+            [
+                Cmd::Op(118),
+                Cmd::Op(169),
+                Cmd::Bytes(pkb_hash),
+                Cmd::Op(136),
+                Cmd::Op(172),
+            ]
+            .to_vec(),
+        );
+        let tx_out_target = TxOut {
+            amount,
+            script_pubkey,
+        };
+
+        // create the desired transaction object
+        let mut tx = Tx::new(1, vec![tx_in], vec![tx_out_change, tx_out_target]);
+
+        assert_eq!(tx.fee()?, (0.01 * 1e8) as u64);
+
+        // produce the unlocking script for this p2pkh tx: [<signature>, <pubkey>]
+
+        // first produce the <pubkey> that will satisfy OP_EQUALVERIFY on the locking script
+        let sk = BigInt::from(8675309);
+        let pk = PublicKey::from_sk(&sk);
+        let sec = pk.encode(true, false)?;
+        // now produce the digital signature that will satisfy the OP_CHECKSIG on the locking script
+        let tx_encode = tx.encode(true, Some(0))?;
+        let sig = sign(&sk, &tx_encode);
+        let der = sig.encode();
+        // 1 = SIGHASH_ALL, indicating this der signature encoded "ALL" of the tx
+        let der_and_type = [der.clone(), vec![1u8]].concat();
+
+        // set the unlocking script into the transaction
+        tx.tx_ins[0].script_sig =
+            Script::new(vec![Cmd::Bytes(der_and_type), Cmd::Bytes(sec.clone())]);
+
+        // final check: ensure that our manually constructed transaction is all valid and ready to send out to the wild
+        assert_eq!(tx.validate()?, true);
+
+        // peace of mind: fudge the signature and try again
+        let der = [
+            der[..6].to_vec(),
+            [(der[6] + 1) % 255].to_vec(),
+            der[7..].to_vec(),
+        ]
+        .concat();
+        let der_and_type = [der.clone(), vec![1u8]].concat();
+        tx.tx_ins[0].script_sig = Script::new(vec![Cmd::Bytes(der_and_type), Cmd::Bytes(sec)]);
+
+        assert_eq!(tx.validate()?, false);
+        Ok(())
+    }
+
+    #[test]
+    fn test_is_coinbase() -> Result<()> {
+        // not coinbase
+        let raw = hex::decode("0100000001813f79011acb80925dfe69b3def355fe914bd1d96a3f5f71bf8303c6a989c7d1000000006b483045022100ed81ff192e75a3fd2304004dcadb746fa5e24c5031ccfcf21320b0277457c98f02207a986d955c6e0cb35d446a89d3f56100f4d7f67801c31967743a9c8e10615bed01210349fc4e631e3624a545de3f89f5d8684c7b8138bd94bdd531d2e213bf016b278afeffffff02a135ef01000000001976a914bc3b654dca7e56b04dca18f2566cdaf02e8d9ada88ac99c39800000000001976a9141c4bc762dd5423e332166702cb75f40df79fea1288ac19430600")?;
+        let tx = Tx::decode_bytes(&raw)?;
+        assert_eq!(tx.is_coinbase(), false);
+
+        // is coinbase
+        let raw = hex::decode("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff5e03d71b07254d696e656420627920416e74506f6f6c20626a31312f4542312f4144362f43205914293101fabe6d6d678e2c8c34afc36896e7d9402824ed38e856676ee94bfdb0c6c4bcd8b2e5666a0400000000000000c7270000a5e00e00ffffffff01faf20b58000000001976a914338c84849423992471bffb1a54a8d9b1d69dc28a88ac00000000")?;
+        let mut tx = Tx::decode_bytes(&raw)?;
+        assert_eq!(tx.is_coinbase(), true);
+        tx.tx_ins = vec![];
+        assert_eq!(tx.is_coinbase(), false);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_coinbase_height() -> Result<()> {
+        // not coinbase
+        let raw = hex::decode("0100000001813f79011acb80925dfe69b3def355fe914bd1d96a3f5f71bf8303c6a989c7d1000000006b483045022100ed81ff192e75a3fd2304004dcadb746fa5e24c5031ccfcf21320b0277457c98f02207a986d955c6e0cb35d446a89d3f56100f4d7f67801c31967743a9c8e10615bed01210349fc4e631e3624a545de3f89f5d8684c7b8138bd94bdd531d2e213bf016b278afeffffff02a135ef01000000001976a914bc3b654dca7e56b04dca18f2566cdaf02e8d9ada88ac99c39800000000001976a9141c4bc762dd5423e332166702cb75f40df79fea1288ac19430600")?;
+        let tx = Tx::decode_bytes(&raw)?;
+        assert_eq!(tx.coinbase_height(), None);
+
+        // is coinbase
+        let raw = hex::decode("01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff5e03d71b07254d696e656420627920416e74506f6f6c20626a31312f4542312f4144362f43205914293101fabe6d6d678e2c8c34afc36896e7d9402824ed38e856676ee94bfdb0c6c4bcd8b2e5666a0400000000000000c7270000a5e00e00ffffffff01faf20b58000000001976a914338c84849423992471bffb1a54a8d9b1d69dc28a88ac00000000")?;
+        let tx = Tx::decode_bytes(&raw)?;
+        assert_eq!(tx.coinbase_height(), Some(465879));
 
         Ok(())
     }

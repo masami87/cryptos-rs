@@ -129,18 +129,18 @@ impl<'a> PublicKey<'a> {
         let mut byte_address = version_pkb_hash.clone();
         byte_address.extend_from_slice(&checksum);
 
-        let b58check_address = base_58_check(&byte_address);
+        let b58check_address = base58_encode(&byte_address);
         b58check_address
     }
 }
 
-fn base_58_check(data: &[u8]) -> Result<String> {
+fn base58_encode(data: &[u8]) -> Result<String> {
     if data.len() != 25 {
         return Err(crate::error::CryptosError::Key(
             "the length of data != 25".to_string(),
         ));
     }
-    let mut n = BigInt::from_signed_bytes_be(data);
+    let mut n = BigInt::from_bytes_be(Sign::Plus, data);
     let mut i: BigInt;
     let mut chars = String::new();
     while !n.is_zero() {
@@ -153,7 +153,38 @@ fn base_58_check(data: &[u8]) -> Result<String> {
         .map(|_| BASE58_CHARS.chars().nth(0).unwrap());
     Ok(zeros.chain(chars.chars().rev()).collect())
 }
+
+/// This function if wrote by new bing according to encode function.
+fn base58_decode(data: &str) -> Result<Vec<u8>> {
+    let mut n = BigInt::from(0);
+    for c in data.chars() {
+        n = n * 58
+            + BigInt::from(BASE58_CHARS.find(c).ok_or(crate::error::CryptosError::Key(
+                "invalid character".to_string(),
+            ))?);
+    }
+    let mut bytes = n.to_bytes_be().1;
+    let zeros = data
+        .chars()
+        .take_while(|&c| c == BASE58_CHARS.chars().nth(0).unwrap())
+        .map(|_| 0x00 as u8);
+    Ok(zeros.chain(bytes.into_iter()).collect())
+}
+
 const BASE58_CHARS: &'static str = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+/// Given an address in b58check recover the public key hash.
+pub fn address_to_pkb_hash(b58check_address: &str) -> Result<Vec<u8>> {
+    let byte_address = base58_decode(&b58check_address)?;
+    // validate the checksum
+    let checksum = &sha256(&sha256(&byte_address[..&byte_address.len() - 4]))[..4];
+    if checksum != &byte_address[&byte_address.len() - 4..] {
+        return Err(crate::CryptosError::Key("invalid checksum".to_string()));
+    }
+    // strip the version in front and the checksum at tail
+    let pkb_hash = &byte_address[1..byte_address.len() - 4];
+    Ok(pkb_hash.to_vec())
+}
 
 #[cfg(test)]
 mod tests {
@@ -215,7 +246,23 @@ mod tests {
                 let pk = PublicKey::from_sk(&sk);
                 let address = pk.address(Net::from(net), compressed).unwrap();
                 assert_eq!(&address, expect,);
+                let pkb = pk.encode(true, true).unwrap();
+                let decode_pkb = address_to_pkb_hash(&address).unwrap();
+                assert_eq!(pkb, decode_pkb);
             });
+        Ok(())
+    }
+
+    #[test]
+    fn test_base58_encode() -> Result<()> {
+        let byte_address = [
+            111, 91, 18, 87, 167, 187, 129, 57, 130, 8, 118, 109, 178, 26, 73, 89, 174, 6, 131, 16,
+            234, 221, 168, 80, 72,
+        ];
+        let address = base58_encode(&byte_address)?;
+        assert_eq!(address, "mopVkxp8UhXqRYbCYJsbeE1h1fiF64jcoH");
+        let decode_address = base58_decode(&address)?;
+        assert_eq!(byte_address.to_vec(), decode_address);
         Ok(())
     }
 
