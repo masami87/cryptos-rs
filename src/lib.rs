@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate lazy_static;
 
+mod block;
 mod crypto;
 mod encoding;
 mod error;
