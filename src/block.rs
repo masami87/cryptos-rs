@@ -44,7 +44,7 @@ fn calculate_new_bits(prev_bits: &[u8], dt: u64) -> Vec<u8> {
 }
 
 #[derive(Debug)]
-struct Block {
+pub struct Block {
     version: i32,
     prev_block: Vec<u8>,
     merkle_root: Vec<u8>,
